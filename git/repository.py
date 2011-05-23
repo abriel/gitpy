@@ -22,6 +22,7 @@
 # ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+from collections import Sequence
 import re
 import os
 import subprocess
@@ -110,7 +111,7 @@ class RemoteRepository(Repository):
             if sha is not None:
                 return commit.Commit(self, sha)
         raise NonexistentRefException("Cannot find ref name %r in %s" % (refname, self))
-        
+
     def getBranches(self):
         return self._getRefsAsClass('refs/heads/', branch.RemoteBranch)
     def getTags(self):
@@ -158,7 +159,7 @@ class LocalRepository(Repository):
         return repo
     def clone(self, repo):
         self._executeGitCommandAssertSuccess("git clone %s %s" % (self._asURL(repo), self.path), cwd=".")
-    ########################### Querying repository refs ###########################        
+    ########################### Querying repository refs ###########################
     def getBranches(self):
         returned = []
         for git_branch_line in self._executeGitCommandAssertSuccess("git branch").stdout:
@@ -214,7 +215,7 @@ class LocalRepository(Repository):
         returned = self._executeGitCommand("git merge-base %s %s" % (a, b))
         if returned.returncode == 0:
             return commit.Commit(self, returned.stdout.read().strip())
-        # make sure this is not a misc. error with git 
+        # make sure this is not a misc. error with git
         unused = self.getHead()
         return None
     ################################ Querying Status ###############################
@@ -230,25 +231,23 @@ class LocalRepository(Repository):
         flags = ["--exclude-standard"] + list(flags)
         return [f.strip()
                 for f in self._getOutputAssertSuccess("git ls-files %s" % (" ".join(flags))).splitlines()]
-    def _getRawDiff(self, *flags):
-        flags = list(flags)
-        try:
-            MatchStatus = filter(lambda x: x.startswith('MatchedStatus'), flags)[0]
-            flags.remove(MatchStatus)
-            MatchStatus = MatchStatus.split('=')[1].split(',')
-        except (ValueError, IndexError):
-            MatchStatus = ''
+    def _getRawDiff(self, *flags, **options):
+        match_statuses = options.pop('fileStatuses', None)
+        if match_statuses is not None and not isinstance(match_statuses, Sequence):
+            raise ValueError("matchedStatuses must be a sequence")
+        if options:
+            raise TypeError("Unknown arguments specified: %s" % ", ".join(options))
 
         flags = " ".join(str(f) for f in flags)
         modified_files = []
         for line in self._getOutputAssertSuccess("git diff --raw %s" % flags).splitlines():
             file_status = line.split()[-2]
             file_name   = line.split()[-1]
-            if ( len(MatchStatus) and (file_status in MatchStatus) ) or (not len(MatchStatus)) :
+            if match_statuses is None or file_status in match_statuses:
                 modified_files.append(ModifiedFile(file_name))
-        
+
         return modified_files
-                
+
     def getStagedFiles(self):
         if self.isInitialized():
             return self._getRawDiff('--cached')
@@ -258,7 +257,7 @@ class LocalRepository(Repository):
     def getChangedFiles(self):
         return self._getRawDiff()
     def getDeletedFiles(self):
-        return self._getRawDiff('MatchedStatus=D')
+        return self._getRawDiff(fileStatuses=['D'])
     def getUntrackedFiles(self):
         return self._getFiles("--others")
     def isInitialized(self):
@@ -442,4 +441,4 @@ def find_repository():
         path, path_tail = os.path.split(current_path)
         if not path_tail:
             raise CannotFindRepository("Cannot find repository for %s" % (orig_path,))
-        
+
